@@ -261,3 +261,141 @@ extract_info_from_paragraph(description, full_pattern, "No redress amount found"
     # Navigate to the base page
     # driver.get(base_url+enforcement_path)
     # time.sleep(2)
+
+
+
+
+# def extract_amount(paragraph, name_variants, number_pattern, target_phrases, avoid_phrases):
+#     # Pattern to capture dollar amount along with context
+#     name_pattern = "|".join([re.escape(name) for name in name_variants])
+#     pattern = rf"({number_pattern})"  # Simple capture for dollar amount
+#     # Find all potential matches for dollar amounts in the paragraph
+#     amounts = re.finditer(pattern, paragraph)
+#     for amount_match in amounts:
+#         # Dollar amount found
+#         amount = amount_match.group(1)
+#         print(amount)
+#         # Check surrounding text for context
+#         start, end = amount_match.span()
+#         context_text = paragraph[max(0, start - 65):end + 65].lower()  # Capture text around the match
+#         print(context_text)
+#         # Verify presence of target phrases and absence of avoid phrases
+#         if any(phrase in context_text for phrase in target_phrases) and not any(phrase in context_text for phrase in avoid_phrases) and any(name.lower() in context_text for name in name_variants):
+#             return amount
+#     return "No amount found"
+
+# # Example text with both civil penalty and redress amounts
+# description = "On October 23, 2024, the Bureau issued an order against Goldman Sachs Bank USA (Goldman). The order requires Goldman to pay $19.8 million in redress to consumers and a $45 million civil money penalty and to come into compliance with the law. The Bureau separately took action against Apple for its role in marketing and servicing the Apple Card. The order against Apple requires it to pay a $25 million civil money penalty and to come into compliance with the law."
+# name = "Goldman Sachs Bank USA"
+# # Generate institution name variants
+# name_variants = generate_name_variants(name)
+# print(name_variants)
+# number_pattern = r"\$\d{1,3}(?:\.\d{1,2})?(?:\s*million)?"
+# # Extract Civil Money Penalty
+# civil_target_phrases = ["civil money penalty", "penalty"]
+# civil_avoid_phrases = ["redress"]
+# civil_penalty_amount = extract_amount(description, name_variants, number_pattern, civil_target_phrases, civil_avoid_phrases)
+# for i in re.finditer(number_pattern, description):
+#     print(i)
+# print(f"Civil Money Penalty for {name}: {civil_penalty_amount}")
+# # Extract Redress Amount
+# redress_target_phrases = ["redress", "redressing"]
+# redress_avoid_phrases = ["civil money penalty", "penalty"]
+# redress_amount = extract_amount(description, name_variants, number_pattern, redress_target_phrases, redress_avoid_phrases)
+# print(f"Redress amount for {name}: {redress_amount}")
+
+
+
+def closest_phrase_distance(paragraph, phrases, start, end):
+    min_distance = float('inf')
+    closest_phrase = None
+    for phrase in phrases:
+        for match in re.finditer(re.escape(phrase), paragraph, re.IGNORECASE):
+            # Calculate distance based on whether phrase is before or after the amount
+            if match.start() > end:
+                distance = match.start() - end # if phrase is after $
+            else:
+                distance = start - match.end() # if phrase is in front of $
+            if distance < min_distance:
+                min_distance = distance
+                closest_phrase = phrase
+    return closest_phrase, min_distance
+
+def extract_info_from_paragraph(paragraph, institution_name, phrases, if_not_found="No amount found"):
+    # Generate institution name variants and amount pattern
+    name_variants = generate_name_variants(institution_name)
+    amount_pattern = r"\$\d{1,3}(?:\.\d{1,2})?(?:\s*million)?"
+
+    # Find all matched amount
+    matches = re.finditer(rf"({amount_pattern})", paragraph, re.IGNORECASE)
+
+    output = {}
+    # For each amount, find the closest phrase and catagorize
+    for match in matches:
+        amount = match.group()
+        print(amount)
+        start, end = match.span()
+        # Surrounding text to search for phrases and institution names
+        context_text = paragraph[max(0, start - 100): end + 100].lower()
+        print(context_text)
+        # Determine closest phrase to the dollar amount
+        closest_phrase, _ = closest_phrase_distance(paragraph, phrases + name_variants, start, end)
+        print(closest_phrase)
+        if closest_phrase:
+            # Contextual interpretation based on closest phrase
+            if any(word in closest_phrase.lower() for word in ["penalty", "civil"]):
+                catagory = "Civil_money_penalty"
+                if any(re.search(re.escape(name.lower()), context_text) for name in name_variants):
+                    output[catagory] = amount
+            elif "redress" in closest_phrase.lower():
+                catagory = "Redress_amount"
+                if any(re.search(re.escape(name.lower()), context_text) for name in name_variants):
+                    output[catagory] = amount
+        
+        if output: return output
+        else: return if_not_found
+
+# Example usage
+description = "On October 23, 2024, the Bureau issued an order against Goldman Sachs Bank USA (Goldman). The order requires Goldman to pay $19.8 million in redress to consumers and a $45 million civil money penalty and to come into compliance with the law. The Bureau separately took action against Apple for its role in marketing and servicing the Apple Card. The order against Apple requires it to pay a $25 million civil money penalty and to come into compliance with the law."
+institution_name = "Goldman Sachs Bank USA"
+phrases = ["redress", "redressing", "penalty", "civil money penalty", "penalties"]
+# Extract amounts
+name_variants = generate_name_variants(institution_name)
+amount_pattern = r"\$\d{1,3}(?:\.\d{1,2})?(?:\s*million)?"
+
+# Find all matched amount
+matches = re.finditer(rf"({amount_pattern})", description, re.IGNORECASE)
+
+output = {}
+# For each amount, find the closest phrase and catagorize
+for match in matches:
+    amount = match.group()
+    print(amount)
+    start, end = match.span()
+    # Surrounding text to search for phrases and institution names
+    context_text = description[max(0, start - 100): end + 100].lower()
+    print(context_text)
+
+for phrase in phrases:
+    print(phrase)
+    for match in re.finditer(re.escape(phrase), description, re.IGNORECASE):
+        print(match.start())
+        # Calculate distance based on whether phrase is before or after the amount
+        if match.start() > end:
+            distance = match.start() - end # if phrase is after $
+        else:
+            distance = start - max(0, start - 100) - match.end() # if phrase is in front of $
+        if distance < min_distance:
+            min_distance = distance
+            closest_phrase = phrase
+
+
+    closest_phrase, _ = closest_phrase_distance(context_text, phrases, start, end)
+    print(closest_phrase)
+
+for name in name_variants:
+    print(name.lower())
+
+
+penalty_result = extract_info_from_paragraph(description, institution_name, phrases)
+print(penalty_result)
