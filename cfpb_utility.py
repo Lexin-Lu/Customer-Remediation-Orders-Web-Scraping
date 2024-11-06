@@ -55,25 +55,6 @@ def generate_name_variants(name):
     return list(set(institution_variants))
 
 
-# def extract_info_from_paragraph(paragraph, pattern, if_not_found):
-#     '''
-#     Extract amount information from a paragraph
-#     Input:
-#         paragraph: a text paragraph to extract information from
-#         pattern: a regex pattern of amount
-#         if_not_found: value to return if the amount is not found
-#     Output: 
-#         amount / if_not_found
-#     '''
-#     matches = re.findall(pattern, paragraph, re.IGNORECASE)
-#     if matches:
-#         for match in matches:
-#             amount = next((m for m in match if m and m.startswith("$")), None)
-#             if amount: 
-#                 return amount
-#     else:
-#         return if_not_found
-
 def calculate_distance(amount_start, amount_end, phrase_start, phrase_end):
     '''
     Calculate distance based on relative positions of amount and phrase
@@ -89,7 +70,8 @@ def calculate_distance(amount_start, amount_end, phrase_start, phrase_end):
         return phrase_start - amount_end
     else:  # Phrase appears before amount
         return amount_start - phrase_end
-    
+
+
 def find_closest_phrase(amount_start, amount_end, phrases_positions):
     '''
     Find the closest phrase based on the distance calculation, which will be used to decide the input amount is redress or civil money penalty
