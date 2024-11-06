@@ -27,14 +27,16 @@ chrome_services = Service(ChromeDriverManager().install())
 driver = webdriver.Chrome(service=chrome_services, options=chrome_options)
 
 
-##############################################################################
-# INPUT NEEDED IN THIS SECTION
 # Set up parameters
 base_url = "https://www.consumerfinance.gov"
 enforcement_path = "/enforcement/actions"
 main_web_link = urljoin(base_url, enforcement_path)
 today_timestamp = datetime.now().strftime("%Y%m%d")
+##############################################################################
+# INPUT NEEDED IN THIS SECTION
+# specify the earliest date of an order
 start_date = "2022-01-01T00:00:00"
+# specify which detail items are needed (True: to include; False: not to include)
 info_dict = {
     "Forum": True,
     "Court": True,
@@ -46,11 +48,12 @@ info_dict = {
     "Civil_money_penalty": True,
     "Redress_amount": True
 }
+# specify the output file name
 base_output_name = "CFPB_enforcement_actions.xlsx"
+# specify the path to store the output
 base_output_path = ""
-output_path = base_output_path + today_timestamp + "_" + base_output_name
-
 ##############################################################################
+output_path = base_output_path + today_timestamp + "_" + base_output_name
 
 
 # Helper function
@@ -152,7 +155,7 @@ def get_order_details(link, info_dict):
     
     # Forum
     if info_dict["Forum"]: 
-        order_detail["Forum"] = get_detail_value(detail_soup, ".m-related-metadata__item-container .m-list__item span")
+        order_detail["Forum"] = utility.get_detail_value(detail_soup, ".m-related-metadata__item-container .m-list__item span")
     
     # Court
     if info_dict["Court"] and "Court" in all_items:
@@ -164,9 +167,9 @@ def get_order_details(link, info_dict):
     # Docket number
     if info_dict["Docket_number"] and "Docket number" in all_items:
         if "Court" in all_items: 
-            order_detail["Docket_number"] = get_detail_value(detail_soup, ".m-related-metadata__item-container:nth-child(4) p")
+            order_detail["Docket_number"] = utility.get_detail_value(detail_soup, ".m-related-metadata__item-container:nth-child(4) p")
         elif "Court" not in all_items: 
-            order_detail["Docket_number"] = get_detail_value(detail_soup, ".m-related-metadata__item-container:nth-child(3) p")
+            order_detail["Docket_number"] = utility.get_detail_value(detail_soup, ".m-related-metadata__item-container:nth-child(3) p")
     else: 
         order_detail["Docket_number"] = None
 

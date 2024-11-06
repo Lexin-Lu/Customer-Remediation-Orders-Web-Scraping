@@ -55,25 +55,51 @@ def generate_name_variants(name):
     return list(set(institution_variants))
 
 
-def extract_info_from_paragraph(paragraph, pattern, if_not_found):
-    matches = re.findall(pattern, paragraph, re.IGNORECASE)
-    if matches:
-        for match in matches:
-            amount = next((m for m in match if m and m.startswith("$")), None)
-            if amount: 
-                return amount
-    else:
-        return if_not_found
+# def extract_info_from_paragraph(paragraph, pattern, if_not_found):
+#     '''
+#     Extract amount information from a paragraph
+#     Input:
+#         paragraph: a text paragraph to extract information from
+#         pattern: a regex pattern of amount
+#         if_not_found: value to return if the amount is not found
+#     Output: 
+#         amount / if_not_found
+#     '''
+#     matches = re.findall(pattern, paragraph, re.IGNORECASE)
+#     if matches:
+#         for match in matches:
+#             amount = next((m for m in match if m and m.startswith("$")), None)
+#             if amount: 
+#                 return amount
+#     else:
+#         return if_not_found
 
 def calculate_distance(amount_start, amount_end, phrase_start, phrase_end):
-    # Calculate distance based on relative positions of amount and phrase
+    '''
+    Calculate distance based on relative positions of amount and phrase
+    Input: 
+        amount_start: the start position of the amount
+        amount_end: the end position of the amount
+        phrase_start: the start position of the phrase
+        phrase_end: the end position of the phrase
+    Output:
+        the distance between the amount and the phrase
+    '''
     if phrase_start > amount_end:  # Phrase appears after amount
         return phrase_start - amount_end
     else:  # Phrase appears before amount
         return amount_start - phrase_end
     
 def find_closest_phrase(amount_start, amount_end, phrases_positions):
-    # Calculate closest phrase based on adjusted distance calculation
+    '''
+    Find the closest phrase based on the distance calculation, which will be used to decide the input amount is redress or civil money penalty
+    Input:
+        amount_start: the start position of the amount
+        amount_end: the end position of the amount
+        phrases_positions: a list of position of specified phrases
+    Output:
+        closest_phrase: the phrase that is closest to the amount
+    '''
     closest_phrase, min_distance = None, float('inf')
     for phrase, (phrase_start, phrase_end) in phrases_positions:
         distance = calculate_distance(amount_start, amount_end, phrase_start, phrase_end)
@@ -84,6 +110,18 @@ def find_closest_phrase(amount_start, amount_end, phrases_positions):
 
 
 def extract_info_from_paragraph(paragraph, institution_name, phrases, number_pattern, if_not_found=None):
+    '''
+    Extract amount information from a paragraph and decide the category (penalty vs. redress)
+    Input:
+        paragraph: a text paragraph to extract information from
+        institution_name: the institution name that the amount should be tied to
+        number_pattern: a regex pattern of amount
+        if_not_found: value to return if the amount is not found, default None
+    Output: 
+        result (if amount that meets requirements is found): a dictionary whose keys are the category of the amount and values are the amount
+        if_not_found (if amount that meets requirements is not found)
+    
+    '''
     # Generate institution name variants
     name_variants = generate_name_variants(institution_name)
     number_pattern = r"\$\d{1,3}(?:,\d{3})*(?:\.\d{1,5})?(?:\s*(billion|million|thousand))?"
@@ -109,6 +147,13 @@ def extract_info_from_paragraph(paragraph, institution_name, phrases, number_pat
 
 
 def standardize_amount(amount_str):
+    '''
+    Standardize the format of the amount columns into "xxx,xxx,xxx.xx" format
+    Input: 
+        amount_str: the amount in string
+    Output:
+        numeric_amount: the numeric and well-formatted amount
+    '''
     # Remove the dollar sign and commas
     amount_str = amount_str.replace('$', '').replace(',', '')
 
@@ -123,5 +168,5 @@ def standardize_amount(amount_str):
         number = float(amount_str)  # Basic numeric amount without suffix
 
     # Format to "xxx,xxx.xxx"
-    numeric_amout = f"{number:,.3f}".rstrip('0').rstrip('.')
-    return numeric_amout # Remove trailing zeros and decimal if unnecessary 
+    numeric_amount = f"{number:,.3f}".rstrip('0').rstrip('.')
+    return numeric_amount # Remove trailing zeros and decimal if unnecessary 
