@@ -4,6 +4,7 @@ import re
 import os
 import time
 import pandas as pd
+from itertools import chain
 from bs4 import BeautifulSoup
 from datetime import datetime
 from urllib.parse import urljoin
@@ -30,6 +31,7 @@ driver = webdriver.Chrome(service=chrome_services, options=chrome_options)
 base_url = "https://www.consumerfinance.gov"
 enforcement_path = "/enforcement/actions"
 main_page_link = urljoin(base_url, enforcement_path)
+today_timestamp = datetime.now().strftime("%Y%m%d")
 start_date = "2022-01-01T00:00:00"
 info_dict = {
     "Forum": True,
@@ -41,10 +43,9 @@ info_dict = {
     "Civil_money_penalty": True,
     "Redress_amount": True
 }
-
-
-driver.get(main_page_link)
-time.sleep(2)
+base_output_name = "CFPB_enforcement_actions.xlsx"
+base_output_path = ""
+outpath = today_timestamp + "_" + base_output_name
 
 
 # Step 1: Get the total page of the website
@@ -100,10 +101,6 @@ def get_order_links(main_page_link):
         
     return order_links
 
-temp_1104 = get_order_links(main_page_link)
-len(temp_1104)
-
-
 def get_detail_value(detail_soup, selector):
     details = detail_soup.select(selector)
     detail_values = []
@@ -135,7 +132,6 @@ def generate_name_variants(name):
 
     return list(set(institution_variants))
 
-
 def extract_info_from_paragraph(paragraph, pattern, if_not_found):
     matches = re.findall(pattern, paragraph, re.IGNORECASE)
     if matches:
@@ -146,16 +142,64 @@ def extract_info_from_paragraph(paragraph, pattern, if_not_found):
     else:
         return if_not_found
 
+def calculate_distance(amount_start, amount_end, phrase_start, phrase_end):
+    # Calculate distance based on relative positions of amount and phrase
+    if phrase_start > amount_end:  # Phrase appears after amount
+        return phrase_start - amount_end
+    else:  # Phrase appears before amount
+        return amount_start - phrase_end
+    
+def find_closest_phrase(amount_start, amount_end, phrases_positions):
+    # Calculate closest phrase based on adjusted distance calculation
+    closest_phrase, min_distance = None, float('inf')
+    for phrase, (phrase_start, phrase_end) in phrases_positions:
+        distance = calculate_distance(amount_start, amount_end, phrase_start, phrase_end)
+        if distance < min_distance:
+            min_distance = distance
+            closest_phrase = phrase
+    return closest_phrase
+
+def extract_info_from_paragraph(paragraph, institution_name, phrases, number_pattern, if_not_found=None):
+    # Generate institution name variants
+    name_variants = generate_name_variants(institution_name)
+    number_pattern = r"\$\d{1,3}(?:,\d{3})*(?:\.\d{1,5})?(?:\s*(billion|million|thousand))?"
+    # Find dollar amounts and their start/end positions
+    amounts = [(match.group(), match.start(), match.end()) for match in re.finditer(rf"({number_pattern})", paragraph)]
+    # Find phrases and their start/end positions
+    phrases_positions = []
+    for phrase in phrases:  
+        for match in re.finditer(re.escape(phrase), paragraph, re.IGNORECASE):
+            phrases_positions.append((phrase, (match.start(), match.end())))
+    # Process each amount to determine if it’s redress or penalty
+    results = {}
+    for amount, amount_start, amount_end in amounts:
+        closest_phrase = find_closest_phrase(amount_start, amount_end, phrases_positions)
+        context_text = paragraph[max(0, amount_start - 300): amount_end + 300].lower()
+        # Decide amount type based on closest phrase
+        if closest_phrase and (closest_phrase in context_text):
+            if any(word in closest_phrase.lower() for word in ["penalty", "civil", "penalties"]) and any(re.search(re.escape(name.lower()), context_text) for name in name_variants):
+                results["Penalty Amount"] = amount
+            elif "redress" in closest_phrase.lower() and any(re.search(re.escape(name.lower()), context_text) for name in name_variants):
+                results["Redress Amount"] = amount
+    return results if results else if_not_found
 
 # Step 2: Scrape details of each order
 def get_order_details(link, info_dict):
     # Navigate to the detial page
-    link = temp_1104[4]
     driver.get(link)
     time.sleep(2)
 
     # Parse the detial page contents
     detail_soup = BeautifulSoup(driver.page_source, "html.parser")
+
+    # Find all available details in this page
+    all_possible_items = ["Forum", "Court", "Docket number", "Initial filing date", "Status", "Products"]
+    items = detail_soup.find_all("h3", class_ = "h4")
+    all_items = []
+    for item in items:
+        if item.get_text(strip=True) in all_possible_items:
+            all_items.append(item.get_text(strip=True))
+
 
     # Extract order detials
     order_detail = {}
@@ -169,233 +213,105 @@ def get_order_details(link, info_dict):
         order_detail["Forum"] = get_detail_value(detail_soup, ".m-related-metadata__item-container .m-list__item span")
     
     # Court
-    elif info_dict["Court"]:
-        order_detail["Court"] = get_detail_value(detail_soup, ".m-related-metadata__item-container:nth-child(3)")
-        for i in range(len(order_detail["Court"])):
-            order_detail["Court"][i] = order_detail["Court"][i][5:]
+    if info_dict["Court"] and "Court" in all_items:
+        court_values = get_detail_value(detail_soup, ".m-related-metadata__item-container:nth-child(3)")
+        if court_values:
+            order_detail["Court"] = [court_value[5:] for court_value in court_values]
+    else: order_detail["Court"] = None
     
     # Docket number
-    elif info_dict["Docket_number"]:
-        order_detail["Docket_number"] = get_detail_value(detail_soup, ".m-related-metadata__item-container:nth-child(4) p")
-    
+    if info_dict["Docket_number"] and "Docket number" in all_items:
+        if "Court" in all_items: 
+            order_detail["Docket_number"] = get_detail_value(detail_soup, ".m-related-metadata__item-container:nth-child(4) p")
+        elif "Court" not in all_items: 
+            order_detail["Docket_number"] = get_detail_value(detail_soup, ".m-related-metadata__item-container:nth-child(3) p")
+    else: 
+        order_detail["Docket_number"] = None
+
     # Initial filing date
-    elif info_dict["Initial_filing_date"]:
+    if info_dict["Initial_filing_date"] and "Initial filing date" in all_items:
         order_detail["Initial_filing_date"] = get_detail_value(detail_soup, ".m-related-metadata__item-container time")
-    
+    else: order_detail["Initial_filing_date"] = None
+
     # Status
-    elif info_dict["Status"]:
+    if info_dict["Status"] and "Status" in all_items:
         order_detail["Status"] = get_detail_value(detail_soup, ".m-related-metadata__status div")
-    
+
     # Products
-    elif info_dict["Products"]:
+    if info_dict["Products"] and "Products" in all_items:
         order_detail["Products"] = get_detail_value(detail_soup, ".a-tag-topic__text")
-    
+
     # Civil money penalty & Redress amount
-    elif info_dict["Civil_money_penalty"] or info_dict["Redress_amount"]:
+    if info_dict["Civil_money_penalty"] or info_dict["Redress_amount"]:
         # Extract the whole description paragraph
         description = detail_soup.select("p:nth-child(1)")[0].get_text(strip=True)
-        # Create a list of institution name variants
-        name_variants = generate_name_variants(order_detail["Institution"])
-        # Generate patterns for amount extracting
-        name_pattern = "|".join(re.escape(v) for v in name_variants)
+        
+        # Generate patterns and phrases for amount extracting
         number_pattern = r"\$\d{1,3}(?:\.\d{1,2})?(?:\s*million)?"
+        phrases = ["redress", "penalty", "civil money penalty", "penalties"]        
 
+        # Extract amounts
+        amount_outputs = extract_info_from_paragraph(description, order_detail["Institution"], phrases, number_pattern, if_not_found=None)
+        
         # Civil money penalty
         if info_dict["Civil_money_penalty"]:
-            # Generate full pattern
-            target_phrase = ["civil money penalty", "penalty"]
-            avoid_phrase = ["redress", "redressing"]
-            full_pattern = generate_full_pattern(name_pattern, number_pattern, target_phrase, avoid_phrase)
-            # Pull the civil money penalty amount
-            order_detail["Civil_money_penalty"] = extract_info_from_paragraph(description, full_pattern, "No civil money penalty found")
-        
+            order_detail["Civil_money_penalty"] = amount_outputs["Penalty Amount"] if amount_outputs and ("Penalty Amount" in amount_outputs.keys()) else None
         # Redress amount
-        elif info_dict["Redress_amount"]:
-            # Generate full pattern
-            phrase = "redress"
-            avoid_phrase = "civil money penalty|penalty"
-            full_pattern = generate_full_pattern(name_pattern, number_pattern, phrase, avoid_phrase)
-            # Pull the civil money penalty amount
-            order_detail["Redress_amount"] = extract_info_from_paragraph(description, full_pattern, "No redress amount found")
+        if info_dict["Redress_amount"]:
+            order_detail["Redress_amount"] = amount_outputs["Redress Amount"] if amount_outputs and ("Redress Amount" in amount_outputs.keys()) else None
 
     return order_detail
 
 
+def standardize_amount(amount_str):
 
-def generate_full_pattern(name_pattern, number_pattern, target_phrase, avoid_phrase):
-    # Generate phrase patterns
-    target_pattern = "|".join([re.escape(phrase) for phrase in target_phrase])
-    avoid_pattern = "|".join([re.escape(phrase) for phrase in avoid_phrase])
+    # Remove the dollar sign and commas
+    amount_str = amount_str.replace('$', '').replace(',', '')
 
-    # Generate full pattern
-    full_pattern = (
-            rf"(?:(?:{name_pattern}).*?({number_pattern})(?!.*?(?:{avoid_pattern})).*?(?:{target_pattern})|"     # Name - $ - Phrase
-            rf"(?:{name_pattern}).*?(?:{target_pattern}).*?({number_pattern})(?!.*?(?:{avoid_pattern}))|"        # Name - Phrase - $
-            rf"(?:{target_pattern}).*?({number_pattern})(?!.*?(?:{avoid_pattern})).*?(?:{name_pattern})|"        # Phrase - $ - Name
-            rf"(?:{target_pattern}).*?(?:{name_pattern}).*?({number_pattern})(?!.*?(?:{avoid_pattern}))|"        # Phase - Name - $
-            rf"({number_pattern})(?!.*?(?:{avoid_pattern})).*?(?:{target_pattern}).*?(?:{name_pattern})|"        # $ - Phrase - Name
-            rf"({number_pattern})(?!.*?(?:{avoid_pattern})).*?(?:{target_pattern}).*?(?:{name_pattern}))"        # $ - Name - Phrase
-            )        
-    return full_pattern
+    # Check for "million", "billion", or "thousand" and convert accordingly
+    if 'million' in amount_str:
+        number = float(re.sub(r' million', '', amount_str)) * 1_000_000
+    elif 'billion' in amount_str:
+        number = float(re.sub(r' billion', '', amount_str)) * 1_000_000_000
+    elif 'thousand' in amount_str:
+        number = float(re.sub(r' thousand', '', amount_str)) * 1_000
+    else:
+        number = float(amount_str)  # Basic numeric amount without suffix
 
-
-description = "On October 23, 2024, the Bureau issued an order against Goldman Sachs Bank USA (Goldman). The order requires Goldman to pay $19.8 million in redress to consumers and a $45 million civil money penalty and to come into compliance with the law.The Bureau separately took action against Apple for its role in marketing and servicing the Apple Card. The order against Apple requires it to pay a $25 million civil money penalty and to come into compliance with the law."
-name = "Goldman Sachs Bank USA"
-# Create a list of institution name variants
-name_variants = generate_name_variants(name)
-# Generate patterns for amount extracting
-name_pattern = "|".join(re.escape(v) for v in name_variants)
-number_pattern = r"\$\d{1,3}(?:\.\d{1,2})?(?:\s*million)?"
-phrase = "redress|redressing"
-avoid_phrase = "civil money penalty|penalty" 
-full_pattern = generate_full_pattern(name_pattern, number_pattern, phrase, avoid_phrase)
-# Pull the civil money penalty amount
-extract_info_from_paragraph(description, full_pattern, "No redress amount found")
+    # Format to "xxx,xxx.xxx"
+    numeric_amout = f"{number:,.3f}".rstrip('0').rstrip('.')
+    return numeric_amout # Remove trailing zeros and decimal if unnecessary 
 
 
+def main(main_page_link, info_dict, output_path):
+    # Navigate to the main page
+    driver.get(main_page_link)
+    time.sleep(2)
+
+    # Step 1: Scrape order links within the specified time period
+    print("Begin scraping order links...")
+    order_links = get_order_links(main_page_link)
+    print("Managed to get all order links")
+
+    # Step 2: Scrape details of each order
+    print("Begin scrap order details...")
+    res = []
+    for link in order_links:
+        res.append(get_order_details(link, info_dict))
+    print("Managed to scrape all order details")
+
+    # Step 3: Convert the result into a clean Pandas dataframe
+    df = pd.DataFrame(res)
+    # Flatten lists in the dataframe
+    for col in df:
+        df[col] = df[col].apply(lambda x: ", ".join(x) if isinstance(x, list) else x)
+    # Convert the amount units into scientifc format
+    df["Civil_money_penalty"] = df["Civil_money_penalty"].apply(lambda x: standardize_amount(x) if pd.notnull(x) else x)
+    df["Redress_amount"] = df["Redress_amount"].apply(lambda x: standardize_amount(x) if pd.notnull(x) else x)
 
 
-# Main function
-# res = []
-#def main():
-    # Navigate to the base page
-    # driver.get(base_url+enforcement_path)
-    # time.sleep(2)
+    # Step 4: Output the result dataframe
+    df.to_csv(output_path, index=False)
 
 
-
-
-# def extract_amount(paragraph, name_variants, number_pattern, target_phrases, avoid_phrases):
-#     # Pattern to capture dollar amount along with context
-#     name_pattern = "|".join([re.escape(name) for name in name_variants])
-#     pattern = rf"({number_pattern})"  # Simple capture for dollar amount
-#     # Find all potential matches for dollar amounts in the paragraph
-#     amounts = re.finditer(pattern, paragraph)
-#     for amount_match in amounts:
-#         # Dollar amount found
-#         amount = amount_match.group(1)
-#         print(amount)
-#         # Check surrounding text for context
-#         start, end = amount_match.span()
-#         context_text = paragraph[max(0, start - 65):end + 65].lower()  # Capture text around the match
-#         print(context_text)
-#         # Verify presence of target phrases and absence of avoid phrases
-#         if any(phrase in context_text for phrase in target_phrases) and not any(phrase in context_text for phrase in avoid_phrases) and any(name.lower() in context_text for name in name_variants):
-#             return amount
-#     return "No amount found"
-
-# # Example text with both civil penalty and redress amounts
-# description = "On October 23, 2024, the Bureau issued an order against Goldman Sachs Bank USA (Goldman). The order requires Goldman to pay $19.8 million in redress to consumers and a $45 million civil money penalty and to come into compliance with the law. The Bureau separately took action against Apple for its role in marketing and servicing the Apple Card. The order against Apple requires it to pay a $25 million civil money penalty and to come into compliance with the law."
-# name = "Goldman Sachs Bank USA"
-# # Generate institution name variants
-# name_variants = generate_name_variants(name)
-# print(name_variants)
-# number_pattern = r"\$\d{1,3}(?:\.\d{1,2})?(?:\s*million)?"
-# # Extract Civil Money Penalty
-# civil_target_phrases = ["civil money penalty", "penalty"]
-# civil_avoid_phrases = ["redress"]
-# civil_penalty_amount = extract_amount(description, name_variants, number_pattern, civil_target_phrases, civil_avoid_phrases)
-# for i in re.finditer(number_pattern, description):
-#     print(i)
-# print(f"Civil Money Penalty for {name}: {civil_penalty_amount}")
-# # Extract Redress Amount
-# redress_target_phrases = ["redress", "redressing"]
-# redress_avoid_phrases = ["civil money penalty", "penalty"]
-# redress_amount = extract_amount(description, name_variants, number_pattern, redress_target_phrases, redress_avoid_phrases)
-# print(f"Redress amount for {name}: {redress_amount}")
-
-
-
-def closest_phrase_distance(paragraph, phrases, start, end):
-    min_distance = float('inf')
-    closest_phrase = None
-    for phrase in phrases:
-        for match in re.finditer(re.escape(phrase), paragraph, re.IGNORECASE):
-            # Calculate distance based on whether phrase is before or after the amount
-            if match.start() > end:
-                distance = match.start() - end # if phrase is after $
-            else:
-                distance = start - match.end() # if phrase is in front of $
-            if distance < min_distance:
-                min_distance = distance
-                closest_phrase = phrase
-    return closest_phrase, min_distance
-
-def extract_info_from_paragraph(paragraph, institution_name, phrases, if_not_found="No amount found"):
-    # Generate institution name variants and amount pattern
-    name_variants = generate_name_variants(institution_name)
-    amount_pattern = r"\$\d{1,3}(?:\.\d{1,2})?(?:\s*million)?"
-
-    # Find all matched amount
-    matches = re.finditer(rf"({amount_pattern})", paragraph, re.IGNORECASE)
-
-    output = {}
-    # For each amount, find the closest phrase and catagorize
-    for match in matches:
-        amount = match.group()
-        print(amount)
-        start, end = match.span()
-        # Surrounding text to search for phrases and institution names
-        context_text = paragraph[max(0, start - 100): end + 100].lower()
-        print(context_text)
-        # Determine closest phrase to the dollar amount
-        closest_phrase, _ = closest_phrase_distance(paragraph, phrases + name_variants, start, end)
-        print(closest_phrase)
-        if closest_phrase:
-            # Contextual interpretation based on closest phrase
-            if any(word in closest_phrase.lower() for word in ["penalty", "civil"]):
-                catagory = "Civil_money_penalty"
-                if any(re.search(re.escape(name.lower()), context_text) for name in name_variants):
-                    output[catagory] = amount
-            elif "redress" in closest_phrase.lower():
-                catagory = "Redress_amount"
-                if any(re.search(re.escape(name.lower()), context_text) for name in name_variants):
-                    output[catagory] = amount
-        
-        if output: return output
-        else: return if_not_found
-
-# Example usage
-description = "On October 23, 2024, the Bureau issued an order against Goldman Sachs Bank USA (Goldman). The order requires Goldman to pay $19.8 million in redress to consumers and a $45 million civil money penalty and to come into compliance with the law. The Bureau separately took action against Apple for its role in marketing and servicing the Apple Card. The order against Apple requires it to pay a $25 million civil money penalty and to come into compliance with the law."
-institution_name = "Goldman Sachs Bank USA"
-phrases = ["redress", "redressing", "penalty", "civil money penalty", "penalties"]
-# Extract amounts
-name_variants = generate_name_variants(institution_name)
-amount_pattern = r"\$\d{1,3}(?:\.\d{1,2})?(?:\s*million)?"
-
-# Find all matched amount
-matches = re.finditer(rf"({amount_pattern})", description, re.IGNORECASE)
-
-output = {}
-# For each amount, find the closest phrase and catagorize
-for match in matches:
-    amount = match.group()
-    print(amount)
-    start, end = match.span()
-    # Surrounding text to search for phrases and institution names
-    context_text = description[max(0, start - 100): end + 100].lower()
-    print(context_text)
-
-for phrase in phrases:
-    print(phrase)
-    for match in re.finditer(re.escape(phrase), description, re.IGNORECASE):
-        print(match.start())
-        # Calculate distance based on whether phrase is before or after the amount
-        if match.start() > end:
-            distance = match.start() - end # if phrase is after $
-        else:
-            distance = start - max(0, start - 100) - match.end() # if phrase is in front of $
-        if distance < min_distance:
-            min_distance = distance
-            closest_phrase = phrase
-
-
-    closest_phrase, _ = closest_phrase_distance(context_text, phrases, start, end)
-    print(closest_phrase)
-
-for name in name_variants:
-    print(name.lower())
-
-
-penalty_result = extract_info_from_paragraph(description, institution_name, phrases)
-print(penalty_result)
+main(main_page_link, info_dict, output_path)
