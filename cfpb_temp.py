@@ -1,10 +1,8 @@
 # Import Required Libraries
-import requests
 import re
 import os
 import time
 import pandas as pd
-from itertools import chain
 from bs4 import BeautifulSoup
 from datetime import datetime
 from urllib.parse import urljoin
@@ -15,6 +13,8 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.options import Options
 
+# Import utility functions
+import cfpb_utility as utility
 
 
 # Set up the Chrome WebDriver
@@ -27,10 +27,12 @@ chrome_services = Service(ChromeDriverManager().install())
 driver = webdriver.Chrome(service=chrome_services, options=chrome_options)
 
 
+##############################################################################
+# INPUT NEEDED IN THIS SECTION
 # Set up parameters
 base_url = "https://www.consumerfinance.gov"
 enforcement_path = "/enforcement/actions"
-main_page_link = urljoin(base_url, enforcement_path)
+main_web_link = urljoin(base_url, enforcement_path)
 today_timestamp = datetime.now().strftime("%Y%m%d")
 start_date = "2022-01-01T00:00:00"
 info_dict = {
@@ -40,18 +42,28 @@ info_dict = {
     "Initial_filing_date": True,
     "Status": True,
     "Products": True,
+    "Description": True,
     "Civil_money_penalty": True,
     "Redress_amount": True
 }
 base_output_name = "CFPB_enforcement_actions.xlsx"
 base_output_path = ""
-outpath = today_timestamp + "_" + base_output_name
+output_path = base_output_path + today_timestamp + "_" + base_output_name
+
+##############################################################################
 
 
-# Step 1: Get the total page of the website
-def get_total_pages(main_page_link):
+# Helper function
+def get_total_pages(main_web_link):
+    '''
+    Get the total page of the main website
+    Input: 
+        main_web_link: the link of main website
+    Output: 
+        total_pages: the number of total pages
+    '''
     # Navidate to the main page
-    driver.get(main_page_link)
+    driver.get(main_web_link)
     time.sleep(2)
 
     # Parse the main page
@@ -63,16 +75,21 @@ def get_total_pages(main_page_link):
 
     return total_pages
 
-
-# Step 2: Scrape order links after 1/1/2022 across all pages
-def get_order_links(main_page_link):
+def get_order_links(main_web_link):
+    '''
+    Get links of all orders within the specified time
+    Input: 
+        main_web_link: the link of main website
+    Output: 
+        order_links: a list containing all order links
+    '''
     order_links = []
     page = 1
-    total_page = get_total_pages(main_page_link)
+    total_page = get_total_pages(main_web_link)
     scrape = True
     while scrape:
         # Navigate to the page
-        url = f"{main_page_link}?page={page}"
+        url = f"{main_web_link}?page={page}"
         driver.get(url)
         time.sleep(2)
         
@@ -101,90 +118,15 @@ def get_order_links(main_page_link):
         
     return order_links
 
-def get_detail_value(detail_soup, selector):
-    details = detail_soup.select(selector)
-    detail_values = []
-    for detail in details:
-        detail_values.append(detail.get_text(strip=True))
-    
-    return detail_values
-
-def generate_name_variants(name):
-    # Full name & the first word
-    institution_variants = [name, name.split()[0]]
-    # Name without commas and suffixes
-    suffixes = ["Inc.", "LLC", "N.A.", "et", "al.", "Corp.", "Co.", "Ltd."]
-    name_parts = name.replace(",", "").split()
-    
-    if ";" in name: 
-        names = name.split(";")
-        institution_variants.extend(names)
-        cleaned_names = []
-        for n in names:
-            n_parts = n.replace(",", "").split()
-            cleaned_names.append(" ".join([part for part in n_parts if part not in suffixes]))
-        institution_variants.extend(cleaned_names)
-        institution_variants.append("; ".join(n for n in cleaned_names))
-    else: 
-        cleaned_name = " ".join([part for part in name_parts if part not in suffixes])
-        institution_variants.append(cleaned_name)    
-
-
-    return list(set(institution_variants))
-
-def extract_info_from_paragraph(paragraph, pattern, if_not_found):
-    matches = re.findall(pattern, paragraph, re.IGNORECASE)
-    if matches:
-        for match in matches:
-            amount = next((m for m in match if m and m.startswith("$")), None)
-            if amount: 
-                return amount
-    else:
-        return if_not_found
-
-def calculate_distance(amount_start, amount_end, phrase_start, phrase_end):
-    # Calculate distance based on relative positions of amount and phrase
-    if phrase_start > amount_end:  # Phrase appears after amount
-        return phrase_start - amount_end
-    else:  # Phrase appears before amount
-        return amount_start - phrase_end
-    
-def find_closest_phrase(amount_start, amount_end, phrases_positions):
-    # Calculate closest phrase based on adjusted distance calculation
-    closest_phrase, min_distance = None, float('inf')
-    for phrase, (phrase_start, phrase_end) in phrases_positions:
-        distance = calculate_distance(amount_start, amount_end, phrase_start, phrase_end)
-        if distance < min_distance:
-            min_distance = distance
-            closest_phrase = phrase
-    return closest_phrase
-
-def extract_info_from_paragraph(paragraph, institution_name, phrases, number_pattern, if_not_found=None):
-    # Generate institution name variants
-    name_variants = generate_name_variants(institution_name)
-    number_pattern = r"\$\d{1,3}(?:,\d{3})*(?:\.\d{1,5})?(?:\s*(billion|million|thousand))?"
-    # Find dollar amounts and their start/end positions
-    amounts = [(match.group(), match.start(), match.end()) for match in re.finditer(rf"({number_pattern})", paragraph)]
-    # Find phrases and their start/end positions
-    phrases_positions = []
-    for phrase in phrases:  
-        for match in re.finditer(re.escape(phrase), paragraph, re.IGNORECASE):
-            phrases_positions.append((phrase, (match.start(), match.end())))
-    # Process each amount to determine if it’s redress or penalty
-    results = {}
-    for amount, amount_start, amount_end in amounts:
-        closest_phrase = find_closest_phrase(amount_start, amount_end, phrases_positions)
-        context_text = paragraph[max(0, amount_start - 300): amount_end + 300].lower()
-        # Decide amount type based on closest phrase
-        if closest_phrase and (closest_phrase in context_text):
-            if any(word in closest_phrase.lower() for word in ["penalty", "civil", "penalties"]) and any(re.search(re.escape(name.lower()), context_text) for name in name_variants):
-                results["Penalty Amount"] = amount
-            elif "redress" in closest_phrase.lower() and any(re.search(re.escape(name.lower()), context_text) for name in name_variants):
-                results["Redress Amount"] = amount
-    return results if results else if_not_found
-
-# Step 2: Scrape details of each order
 def get_order_details(link, info_dict):
+    '''
+    Get the values of detail items for each order
+    Input:
+        link: the link of each order
+        info_dict: the parameters dictionary indicating which detail items are needed
+    Output:
+        order_detail: a dictionary containing all values of the required detail items for this order
+    '''
     # Navigate to the detial page
     driver.get(link)
     time.sleep(2)
@@ -214,7 +156,7 @@ def get_order_details(link, info_dict):
     
     # Court
     if info_dict["Court"] and "Court" in all_items:
-        court_values = get_detail_value(detail_soup, ".m-related-metadata__item-container:nth-child(3)")
+        court_values = utility.get_detail_value(detail_soup, ".m-related-metadata__item-container:nth-child(3)")
         if court_values:
             order_detail["Court"] = [court_value[5:] for court_value in court_values]
     else: order_detail["Court"] = None
@@ -230,17 +172,21 @@ def get_order_details(link, info_dict):
 
     # Initial filing date
     if info_dict["Initial_filing_date"] and "Initial filing date" in all_items:
-        order_detail["Initial_filing_date"] = get_detail_value(detail_soup, ".m-related-metadata__item-container time")
+        order_detail["Initial_filing_date"] = utility.get_detail_value(detail_soup, ".m-related-metadata__item-container time")
     else: order_detail["Initial_filing_date"] = None
 
     # Status
     if info_dict["Status"] and "Status" in all_items:
-        order_detail["Status"] = get_detail_value(detail_soup, ".m-related-metadata__status div")
+        order_detail["Status"] = utility.get_detail_value(detail_soup, ".m-related-metadata__status div")
 
     # Products
     if info_dict["Products"] and "Products" in all_items:
-        order_detail["Products"] = get_detail_value(detail_soup, ".a-tag-topic__text")
+        order_detail["Products"] = utility.get_detail_value(detail_soup, ".a-tag-topic__text")
 
+    # Description:
+    if info_dict["Description"]:
+        order_detail["Description"] = detail_soup.select("p:nth-child(1)")[0].get_text(strip=True)
+    
     # Civil money penalty & Redress amount
     if info_dict["Civil_money_penalty"] or info_dict["Redress_amount"]:
         # Extract the whole description paragraph
@@ -248,10 +194,10 @@ def get_order_details(link, info_dict):
         
         # Generate patterns and phrases for amount extracting
         number_pattern = r"\$\d{1,3}(?:\.\d{1,2})?(?:\s*million)?"
-        phrases = ["redress", "penalty", "civil money penalty", "penalties"]        
+        phrases = ["redress", "refund", "penalty", "civil money penalty", "penalties"]        
 
         # Extract amounts
-        amount_outputs = extract_info_from_paragraph(description, order_detail["Institution"], phrases, number_pattern, if_not_found=None)
+        amount_outputs = utility.extract_info_from_paragraph(description, order_detail["Institution"], phrases, number_pattern, if_not_found=None)
         
         # Civil money penalty
         if info_dict["Civil_money_penalty"]:
@@ -262,35 +208,21 @@ def get_order_details(link, info_dict):
 
     return order_detail
 
-
-def standardize_amount(amount_str):
-
-    # Remove the dollar sign and commas
-    amount_str = amount_str.replace('$', '').replace(',', '')
-
-    # Check for "million", "billion", or "thousand" and convert accordingly
-    if 'million' in amount_str:
-        number = float(re.sub(r' million', '', amount_str)) * 1_000_000
-    elif 'billion' in amount_str:
-        number = float(re.sub(r' billion', '', amount_str)) * 1_000_000_000
-    elif 'thousand' in amount_str:
-        number = float(re.sub(r' thousand', '', amount_str)) * 1_000
-    else:
-        number = float(amount_str)  # Basic numeric amount without suffix
-
-    # Format to "xxx,xxx.xxx"
-    numeric_amout = f"{number:,.3f}".rstrip('0').rstrip('.')
-    return numeric_amout # Remove trailing zeros and decimal if unnecessary 
-
-
-def main(main_page_link, info_dict, output_path):
+def main(main_web_link, info_dict, output_path):
+    '''
+    Main execution function
+    Input:
+        main_web_link: the link of main website
+        info_dict: the parameters dictionary indicating which detail items are needed
+        output_path: the path to store the output
+    '''
     # Navigate to the main page
-    driver.get(main_page_link)
+    driver.get(main_web_link)
     time.sleep(2)
 
     # Step 1: Scrape order links within the specified time period
     print("Begin scraping order links...")
-    order_links = get_order_links(main_page_link)
+    order_links = get_order_links(main_web_link)
     print("Managed to get all order links")
 
     # Step 2: Scrape details of each order
@@ -306,12 +238,14 @@ def main(main_page_link, info_dict, output_path):
     for col in df:
         df[col] = df[col].apply(lambda x: ", ".join(x) if isinstance(x, list) else x)
     # Convert the amount units into scientifc format
-    df["Civil_money_penalty"] = df["Civil_money_penalty"].apply(lambda x: standardize_amount(x) if pd.notnull(x) else x)
-    df["Redress_amount"] = df["Redress_amount"].apply(lambda x: standardize_amount(x) if pd.notnull(x) else x)
-
+    df["Civil_money_penalty"] = df["Civil_money_penalty"].apply(lambda x: utility.standardize_amount(x) if pd.notnull(x) else x)
+    df["Redress_amount"] = df["Redress_amount"].apply(lambda x: utility.standardize_amount(x) if pd.notnull(x) else x)
+    print("The output dataframe is ready.")
 
     # Step 4: Output the result dataframe
-    df.to_csv(output_path, index=False)
+    print("Outputing the results...")
+    df.to_excel(output_path, index=False)
 
 
-main(main_page_link, info_dict, output_path)
+# Execute codes
+main(main_web_link, info_dict, output_path)
