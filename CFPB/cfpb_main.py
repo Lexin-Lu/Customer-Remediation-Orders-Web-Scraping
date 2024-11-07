@@ -32,8 +32,10 @@ base_url = "https://www.consumerfinance.gov"
 enforcement_path = "/enforcement/actions"
 main_web_link = urljoin(base_url, enforcement_path)
 today_timestamp = datetime.now().strftime("%Y%m%d")
+
 ##############################################################################
 # INPUT NEEDED IN THIS SECTION
+
 # specify the earliest date of an order
 start_date = "2022-01-01T00:00:00"
 # specify which detail items are needed (True: to include; False: not to include)
@@ -52,11 +54,14 @@ info_dict = {
 base_output_name = "CFPB_enforcement_actions.xlsx"
 # specify the path to store the output
 base_output_path = ""
+
+# SECTION ENDS
 ##############################################################################
+
 output_path = base_output_path + today_timestamp + "_" + base_output_name
 
 
-# Helper function
+# Helper functions
 def get_total_pages(main_web_link):
     '''
     Get the total page of the main website
