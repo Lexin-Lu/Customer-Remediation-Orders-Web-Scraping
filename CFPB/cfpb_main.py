@@ -53,7 +53,7 @@ info_dict = {
 # specify the output file name
 base_output_name = "CFPB_enforcement_actions.xlsx"
 # specify the path to store the output
-base_output_path = ""
+base_output_path = "CFPB\\"
 
 # SECTION ENDS
 ##############################################################################
