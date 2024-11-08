@@ -1,4 +1,4 @@
-# Import Required Libraries
+##### Import Required Libraries #####
 import re
 import os
 import time
@@ -13,11 +13,11 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.options import Options
 
-# Import utility functions
-import cfpb_utility as utility
+##### Import utility functions #####
+import utility
 
 
-# Set up the Chrome WebDriver
+##### Set up the Chrome WebDriver #####
 os.environ['WDM_SSL_VERIFY'] = '0'
 chrome_options = Options()
 chrome_options.add_argument("--no-sandbox")
@@ -27,7 +27,7 @@ chrome_services = Service(ChromeDriverManager().install())
 driver = webdriver.Chrome(service=chrome_services, options=chrome_options)
 
 
-# Set up parameters
+##### Set up parameters #####
 base_url = "https://www.consumerfinance.gov"
 enforcement_path = "/enforcement/actions"
 main_web_link = urljoin(base_url, enforcement_path)
@@ -61,7 +61,7 @@ base_output_path = "CFPB\\"
 output_path = base_output_path + today_timestamp + "_" + base_output_name
 
 
-# Helper functions
+###### Helper functions #####
 def get_total_pages(main_web_link):
     '''
     Get the total page of the main website
@@ -255,5 +255,5 @@ def main(main_web_link, info_dict, output_path):
     df.to_excel(output_path, index=False)
 
 
-# Execute codes
+###### Execute codes #####
 main(main_web_link, info_dict, output_path)
