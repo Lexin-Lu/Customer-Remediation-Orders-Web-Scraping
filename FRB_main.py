@@ -40,12 +40,12 @@ today_timestamp = datetime.now().strftime("%Y%m%d")
 start_date = datetime.strptime("01/01/2022", "%m/%d/%Y")
 
 # specify the relative path of raw data file
-raw = "Fed\Fed_original.csv"
+raw = "FRB\FRB_original.csv"
 
 # specify the output file name
-base_output_name = "Fed_enforcement_actions_cleaned.xlsx"
+base_output_name = "FRB_enforcement_actions_cleaned.xlsx"
 # specify the path to store the output
-base_output_path = "Fed\\"
+base_output_path = "FRB\\"
 
 # SECTION ENDS
 ##############################################################################
