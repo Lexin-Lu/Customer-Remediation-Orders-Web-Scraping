@@ -203,4 +203,4 @@ To further improve the project, the following enhancements are planned:
 ---
 
 ## Contact Information
-For questions or feedback, please contact: Lexin Lu (lexin.lu@oliverwyman.com)
+Code produced by Oliver Wyman. In case of any question or feedback,  please refer to: Lexin Lu (lexin.lu@oliverwyman.com)
